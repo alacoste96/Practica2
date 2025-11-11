@@ -942,7 +942,7 @@ func (g *Garage) addV() {
 	var vid VehicleID
 
 	if g.availableSlots() == 0 {
-		fmt.Printf("No hay plazas disponibles, saque un vehículo antes.\n\n")
+		fmt.Printf("No hay plazas disponibles, espere o saque un vehículo antes.\n\n")
 		return
 	}
 	fmt.Printf("Vehículos no asignados a una plaza:\n")
@@ -954,6 +954,7 @@ func (g *Garage) addV() {
 	fmt.Println()
 	vid = VehicleID(askUniqueStrID("Introduzca la matrícula del vehiculo a asignar: ", func(s string) bool { return !g.vidExists(VehicleID(s)) }))
 	g.assignVtoSlot(vid)
+
 }
 
 // extraer un vehiculo de una plaza del taller
@@ -1168,12 +1169,20 @@ func polyAskMenuInt(prompt string, which int) int {
 
 // asignar vehículo a la primera plaza libre
 func (g *Garage) assignVtoSlot(vid VehicleID) {
+	var vehicle *Vehicle
+
+	vehicle = g.getVByID(vid)
+	if len(vehicle.issues) == 0 {
+		return
+	}
+
 	for _, s := range g.slots {
 		if s.vehicleID == nil {
 			s.vehicleID = &vid
 			return
 		}
 	}
+
 }
 
 // sacar un vehículo de la plaza del taller
