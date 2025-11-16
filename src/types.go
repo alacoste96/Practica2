@@ -79,7 +79,7 @@ type Vehicle struct {
 	model     string
 	ownerID   ClientID
 	checkInAt time.Time
-	eta       time.Time // fecha estimada de salida
+	eta       time.Duration // fecha estimada de salida
 	issues    []IncidenceID
 }
 

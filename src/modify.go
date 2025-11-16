@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // modificar el id de un cliente
 func (g *Garage) modifyClientID(c *Client, cid ClientID) {
@@ -253,66 +256,51 @@ func (g *Garage) addV() {
 	}
 	fmt.Println()
 	vid = VehicleID(askUniqueStrID("Introduzca la matrícula del vehiculo a asignar: ", func(s string) bool { return !g.vidExists(VehicleID(s)) }))
-	g.assignVtoSlot(vid)
-
-}
-
-// extraer un vehiculo de una plaza del taller
-func (g *Garage) extractV() {
-	var vid VehicleID
-
-	if g.availableSlots() == len(g.slots) {
-		fmt.Printf("No hay vehículos que sacar. Todas las plazas libres.\n\n")
-		return
-	}
-	fmt.Printf("Vehículos situados en una plaza:\n")
-	for _, v := range g.vehicles {
-		if g.vIsInSlot(v.id) {
-			fmt.Printf("	- %s\n", v.id)
-		}
-	}
-	fmt.Println()
-	vid = VehicleID(askUniqueStrID("Introduzca la matrícula del vehículo a extraer: ", func(s string) bool { return !g.vidExists(VehicleID(s)) }))
-	g.extractVfromSlot(vid)
+	go g.assignVtoSlot(vid)
 }
 
 // modificar plazas el taller
 func (g *Garage) modifySlots() {
-	var option int
+	//var option int
 
 	if len(g.slots) == 0 {
 		fmt.Printf("(No hay plazas disponibles, contrate mecánico)\n\n")
 		return
 	}
-	fmt.Printf("=== Asignación de plazas del taller ===\n\n")
-	for {
-		option = polyAskMenuInt("Seleccione si quiere asignar o sacar un coche de una plaza:", 6)
-		switch option {
-		case 1:
-			g.addV()
-		case 2:
-			g.extractV()
-		case 3:
-			return
-		}
-	}
+	g.addV()
 }
 
 func (g *Garage) assignVtoSlot(vid VehicleID) {
 	var vehicle *Vehicle
+	var i *Incidence
+	var issues []*Incidence
 
 	vehicle = g.getVByID(vid)
 	if len(vehicle.issues) == 0 {
 		return
 	}
-
 	for _, s := range g.slots {
 		if s.vehicleID == nil {
 			s.vehicleID = &vid
-			return
+			break
 		}
 	}
 
+	for _, issueID := range vehicle.issues {
+		i = g.getIssueByID(issueID)
+		if i.kind == MECHTYPE {
+			vehicle.eta += 5 * time.Second
+		} else if i.kind == ELECTRICTYPE {
+			vehicle.eta += 7 * time.Second
+		} else {
+			vehicle.eta += 11 * time.Second
+		}
+		issues = append(issues, i)
+	}
+	if vehicle.eta > 15*time.Second {
+
+	}
+	g.extractVfromSlot(vid)
 }
 
 // sacar un vehículo de la plaza del taller

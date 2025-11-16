@@ -115,11 +115,6 @@ func (g *Garage) displayVehicles() {
 		} else {
 			fmt.Printf("Entrada:         %s\n", v.checkInAt.Format("02/01/2006 15:04"))
 		}
-		if v.eta.IsZero() {
-			fmt.Printf("Salida estimada: (Por asignar)\n")
-		} else {
-			fmt.Printf("Salida estimada: %s\n", v.eta.Format("02/01/2006 15:04"))
-		}
 		// Incidencias en bloque
 		fmt.Printf("Incidencias:\n")
 		if len(v.issues) == 0 {

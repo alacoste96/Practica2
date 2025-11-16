@@ -53,7 +53,7 @@ func (g *Garage) newVehicle() {
 	fmt.Printf("Modelo: ")
 	fmt.Scanf("%s", &v.model)
 	v.checkInAt = time.Now().Add(time.Duration(-30) * time.Hour)
-	v.eta = time.Now().AddDate(0, 0, 3)
+	v.eta = 0 * time.Second
 	g.vehicles = append(g.vehicles, &v)
 }
 
