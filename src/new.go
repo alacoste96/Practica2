@@ -14,7 +14,10 @@ func newGarage() *Garage {
 		vehicles:  nil,
 		mechanics: nil,
 		issues:    nil,
-		slots:     nil}
+		slots:     nil,
+		vpool:     nil,
+		hirereqs:  make(chan HireRequest),
+	}
 }
 
 // CREAR un CLIENTE
@@ -57,17 +60,21 @@ func (g *Garage) newVehicle() {
 	g.vehicles = append(g.vehicles, &v)
 }
 
-// CREAR MECÁNICO
-func (g *Garage) newMech() {
-	var m Mechanic
-
-	// ampliar plazas del taller
+func (g *Garage) genSlots() {
 	for i := 0; i < 2; i++ {
 		g.slots = append(g.slots, &Slot{
 			number:    len(g.slots) + 1,
 			vehicleID: nil, // puntero al ID existente en el slice (dirección estable)
 		})
 	}
+}
+
+// CREAR MECÁNICO
+func (g *Garage) newMech() *Mechanic {
+	var m Mechanic
+
+	// ampliar plazas del taller
+	g.genSlots()
 	m.id = MechanicID(askUniqueIntID("ID del mecánico: ", func(n int64) bool { return g.mechIDexists(MechanicID(n)) }))
 	fmt.Printf("Nombre: ")
 	fmt.Scanf("%s", &m.name)
@@ -76,6 +83,7 @@ func (g *Garage) newMech() {
 	m.skill = SkillType(polyAskMenuStr("Seleccione una especialidad:", 1))
 	m.status = MechStatus(polyAskMenuStr("Seleccione un estado:", 2))
 	g.mechanics = append(g.mechanics, &m)
+	return g.mechanics[len(g.mechanics)-1]
 }
 
 // CREAR INCIDENCIA
@@ -95,12 +103,14 @@ func (g *Garage) newIssue() {
 	v.issues = append(v.issues, i.id)
 	i.kind = IssueType(polyAskMenuStr("Tipo de incidencia:", 3))
 	fmt.Println()
-	i.prio = Priority(polyAskMenuStr("Prioridad:", 4))
-	fmt.Println()
-	i.status = IssueStatus(polyAskMenuStr("Estado:", 5))
-	fmt.Println()
-	g.assignMechsToIssue(&i)
-	fmt.Println()
+	//i.prio = Priority(polyAskMenuStr("Prioridad:", 4))
+	//fmt.Println()
+	i.prio = LOW
+	i.status = OPEN
+	//i.status = IssueStatus(polyAskMenuStr("Estado:", 5))
+	//fmt.Println()
+	//g.assignMechsToIssue(&i)
+	//fmt.Println()
 	fmt.Printf("Redacte la Descripción de la incidencia:\n")
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()

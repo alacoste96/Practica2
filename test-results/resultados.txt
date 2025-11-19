@@ -1,0 +1,10 @@
+=== RUN   TestDupCarsWithSameIssue
+--- PASS: TestDupCarsWithSameIssue (0.00s)
+=== RUN   TestDupMechs
+--- PASS: TestDupMechs (0.00s)
+=== RUN   Test3MechsVS1others
+--- PASS: Test3MechsVS1others (0.00s)
+=== RUN   Test1MechVS3others
+--- PASS: Test1MechVS3others (0.00s)
+PASS
+ok  	practica2/src	(cached)

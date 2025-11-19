@@ -101,6 +101,11 @@ type Slot struct {
 	vehicleID *VehicleID
 }
 
+type HireRequest struct {
+	vid   VehicleID      // para que el principal sepa para qué coche es
+	Reply chan *Mechanic // por dónde devolver el mecánico creado
+}
+
 // mi taller, de él recaerá el peso de muchos métodos para su propia gestión
 // La capacidad debe seguir la regla: 2 plazas por mecánico activo.
 type Garage struct {
@@ -109,4 +114,6 @@ type Garage struct {
 	mechanics []*Mechanic
 	issues    []*Incidence
 	slots     []*Slot
+	vpool     []VehicleID
+	hirereqs  chan HireRequest
 }

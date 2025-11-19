@@ -261,7 +261,6 @@ func (g *Garage) addV() {
 
 // modificar plazas el taller
 func (g *Garage) modifySlots() {
-	//var option int
 
 	if len(g.slots) == 0 {
 		fmt.Printf("(No hay plazas disponibles, contrate mecánico)\n\n")
@@ -270,37 +269,46 @@ func (g *Garage) modifySlots() {
 	g.addV()
 }
 
-func (g *Garage) assignVtoSlot(vid VehicleID) {
-	var vehicle *Vehicle
-	var i *Incidence
-	var issues []*Incidence
-
-	vehicle = g.getVByID(vid)
-	if len(vehicle.issues) == 0 {
-		return
-	}
-	for _, s := range g.slots {
-		if s.vehicleID == nil {
-			s.vehicleID = &vid
-			break
+// devuelve un mecánico que está libre
+func (g *Garage) getFreeMech() *Mechanic {
+	for _, m := range g.mechanics {
+		if isFree(m) {
+			return m
 		}
 	}
+	return nil
+}
 
-	for _, issueID := range vehicle.issues {
-		i = g.getIssueByID(issueID)
-		if i.kind == MECHTYPE {
-			vehicle.eta += 5 * time.Second
-		} else if i.kind == ELECTRICTYPE {
-			vehicle.eta += 7 * time.Second
-		} else {
-			vehicle.eta += 11 * time.Second
+func (g *Garage) autoAsignMtoIssues(m *Mechanic, issues []*Incidence) {
+
+	for _, i := range issues {
+		m.issues = append(m.issues, i.id)
+		i.mechanics = append(i.mechanics, m.id)
+	}
+}
+
+func (g *Garage) waitForFreeMech() *Mechanic {
+	var m *Mechanic
+	for {
+		m = g.getFreeMech()
+		if m != nil {
+			return m
 		}
-		issues = append(issues, i)
+		time.Sleep(1 * time.Second)
 	}
-	if vehicle.eta > 15*time.Second {
+}
 
+func setPrioAndStatus(issues []*Incidence) {
+	for _, i := range issues {
+		i.prio = HIGH
+		i.status = INPROCESS
 	}
-	g.extractVfromSlot(vid)
+}
+
+func closeIssues(issues []*Incidence) {
+	for _, i := range issues {
+		i.status = CLOSED
+	}
 }
 
 // sacar un vehículo de la plaza del taller
@@ -310,4 +318,113 @@ func (g *Garage) extractVfromSlot(vid VehicleID) {
 			s.vehicleID = nil
 		}
 	}
+}
+
+func (g *Garage) assignVtoSlot(vid VehicleID) {
+	vehicle := g.getVByID(vid)
+	if vehicle == nil || len(vehicle.issues) == 0 {
+		return
+	}
+
+	// 1) Obtener mecánico principal (esperando si hace falta)
+	mainMech := g.obtainMechanicForVehicle(vid)
+
+	// 2) Meter vehículo en una plaza
+	if !g.placeVehicleInSlot(vid) {
+		// si no hubiera slot libre (por seguridad)
+		return
+	}
+
+	// 3) Recoger incidencias y calcular ETA
+	issues, eta := g.collectIssuesAndEta(vehicle)
+	vehicle.eta = eta
+
+	// 4) Asignar mecánico principal
+	g.autoAsignMtoIssues(mainMech, issues)
+
+	// 5) Posible segundo mecánico
+	var extraMech *Mechanic
+	if eta > 15*time.Second {
+		extraMech = g.obtainSecondMechanic(vid)
+		setPrioAndStatus(issues)
+		g.autoAsignMtoIssues(extraMech, issues)
+	}
+
+	// 6) Simular reparación
+	time.Sleep(eta)
+
+	// 7) Cerrar incidencias y liberar recursos
+	closeIssues(issues)
+	g.extractVfromSlot(vid)
+
+	for _, inc := range issues {
+		delIssueFromMech(mainMech, inc)
+		if extraMech != nil {
+			delIssueFromMech(extraMech, inc)
+		}
+		delIssueFromV(vehicle, inc)
+	}
+}
+
+// 1) Mecánico principal (usa vpool + wait)
+func (g *Garage) obtainMechanicForVehicle(vid VehicleID) *Mechanic {
+	if m := g.getFreeMech(); m != nil {
+		return m
+	}
+
+	// nadie libre -> coche a la cola de espera
+	g.vpool = append(g.vpool, vid)
+	m := g.waitForFreeMech()
+	g.vpool = removeVID(g.vpool, vid)
+	return m
+}
+
+// 2) Colocar vehículo en un slot libre
+func (g *Garage) placeVehicleInSlot(vid VehicleID) bool {
+	for i := range g.slots {
+		if g.slots[i].vehicleID == nil {
+			g.slots[i].vehicleID = &vid
+			return true
+		}
+	}
+	return false
+}
+
+// 3) Construir slice de incidencias y calcular ETA
+func (g *Garage) collectIssuesAndEta(v *Vehicle) ([]*Incidence, time.Duration) {
+	var (
+		issues []*Incidence
+		eta    time.Duration
+	)
+
+	for _, issueID := range v.issues {
+		inc := g.getIssueByID(issueID)
+		if inc == nil {
+			continue
+		}
+		issues = append(issues, inc)
+
+		switch inc.kind {
+		case MECHTYPE:
+			eta += 5 * time.Second
+		case ELECTRICTYPE:
+			eta += 7 * time.Second
+		default:
+			eta += 11 * time.Second
+		}
+	}
+	return issues, eta
+}
+
+// 4) Segundo mecánico (libre o contratado)
+func (g *Garage) obtainSecondMechanic(vid VehicleID) *Mechanic {
+	if m := g.getFreeMech(); m != nil {
+		return m
+	}
+	req := HireRequest{
+		vid:   vid,
+		Reply: make(chan *Mechanic),
+	}
+	g.hirereqs <- req
+	return <-req.Reply
 }

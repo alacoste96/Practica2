@@ -28,7 +28,21 @@ func (g *Garage) vIsInSlot(vid VehicleID) bool {
 	return false
 }
 
-// devuelve si un mecanicos está sociado a una incidencia o no
+func removeVID(slice []VehicleID, id VehicleID) []VehicleID {
+	for i, v := range slice {
+		if v == id {
+			return append(slice[:i], slice[i+1:]...)
+		}
+	}
+	return slice
+}
+
+// devuelve si un mecánico está libre
+func isFree(m *Mechanic) bool {
+	return len(m.issues) == 0 && m.status == ACTIVE
+}
+
+// devuelve si un mecanicos está sociado a una incidencia especifica o no
 func isInIncidence(i *Incidence, m MechanicID) bool {
 	for _, mid := range i.mechanics {
 		if mid == m {
@@ -243,4 +257,49 @@ func (g *Garage) getVByID(vid VehicleID) *Vehicle {
 		}
 	}
 	return nil
+}
+
+func (g *Garage) checkAlert() {
+	for {
+		select {
+		case req := <-g.hirereqs:
+			fmt.Printf("----------------------------------------------------------\n")
+			fmt.Printf("[ALERTA] Es necesario contratar un mecánico nuevo para %s.\n", req.vid)
+			fmt.Printf("----------------------------------------------------------\n\n")
+			mech := g.newMech()
+			req.Reply <- mech
+			continue // volvemos al inicio del for (por si hay más peticiones)
+		default:
+			return
+		}
+	}
+}
+
+// CountVehiclesWithSingleIssue cuenta cuántos vehículos tienen
+// exactamente 1 incidencia, y esa incidencia es del tipo "kind".
+// esto es para el primer test
+func (g *Garage) CountVehiclesWithSingleIssue(kind IssueType) int {
+	count := 0
+
+	for _, v := range g.vehicles {
+		if len(v.issues) != 1 {
+			continue
+		}
+		inc := g.getIssueByID(v.issues[0])
+		if inc != nil && inc.kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
+func (g *Garage) countSkill(skill SkillType) int {
+	var count int = 0
+
+	for _, m := range g.mechanics {
+		if m.skill == skill {
+			count++
+		}
+	}
+	return count
 }

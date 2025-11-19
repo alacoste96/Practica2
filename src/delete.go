@@ -145,3 +145,19 @@ func (g *Garage) delMech() {
 		}
 	}
 }
+
+func delIssueFromMech(m *Mechanic, issue *Incidence) {
+	for i, issueID := range m.issues {
+		if issueID == issue.id {
+			m.issues = append(m.issues[:i], m.issues[i+1:]...)
+		}
+	}
+}
+
+func delIssueFromV(v *Vehicle, issue *Incidence) {
+	for i, issueID := range v.issues {
+		if issueID == issue.id {
+			v.issues = append(v.issues[:i], v.issues[i+1:]...)
+		}
+	}
+}

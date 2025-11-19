@@ -11,8 +11,10 @@ func main() {
 	fmt.Printf("- BIENVENIDO AL TALLER LACOSTE.CO -\n")
 	fmt.Printf("-----------------------------------\n")
 	for {
+		g.checkAlert()
 		fmt.Printf("=== Menú Principal ===\n\n")
 		option = polyAskMenuInt("Seleccione una opción:", 7)
+		g.checkAlert()
 		switch option {
 		case 1:
 			fmt.Printf("=== Menú de Creación ===\n\n")

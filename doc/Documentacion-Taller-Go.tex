@@ -1,0 +1,1378 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{float}  % Para el modificador [H]
+\geometry{margin=2.5cm}
+
+% Configuración de listings para código Go
+\lstset{
+    language=Go,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray}\itshape,
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=10pt,
+    backgroundcolor=\color{white},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    frame=single,
+    tabsize=4,
+    captionpos=b,
+    breaklines=true,
+    breakatwhitespace=false,
+    escapeinside={(*@}{@*)},
+}
+
+\title{\textbf{Documentación Técnica:\\Sistema de Gestión de Taller en Go}}
+\author{Alexandre Lacoste Rodríguez}
+\date{Noviembre 2025}
+
+\begin{document}
+
+\maketitle
+
+\newpage
+\tableofcontents
+\newpage
+
+\section{Resumen}
+
+Este documento describe el diseño, implementación y resultados de testing de un sistema de gestión de talleres mecánicos desarrollado en Go. El sistema permite gestionar clientes, vehículos, incidencias y mecánicos, implementando un modelo de concurrencia para la asignación automática de recursos y simulación de reparaciones.
+
+\subsection{Características principales}
+
+\begin{itemize}
+\item Gestión completa CRUD para todas las entidades
+\item Sistema de plazas dinámico (2 plazas por mecánico activo)
+\item Asignación automática de mecánicos mediante goroutines
+\item Simulación de tiempos de reparación según tipo de incidencia
+\item Sistema de alertas para contratación de personal
+\end{itemize}
+
+\section{Diseño del Sistema}
+
+\subsection{Arquitectura General}
+
+El sistema sigue una arquitectura modular organizada en los siguientes componentes:
+
+\begin{itemize}
+\item \textbf{types.go}: Definición de estructuras de datos y tipos
+\item \textbf{main.go}: Punto de entrada y menú principal
+\item \textbf{new.go}: Funciones de creación de entidades
+\item \textbf{display.go}: Funciones de visualización
+\item \textbf{modify.go}: Funciones de modificación (incluye lógica de concurrencia)
+\item \textbf{delete.go}: Funciones de eliminación
+\item \textbf{aux.go}: Funciones auxiliares y de validación
+\item \textbf{menu.go}: Gestión de menús e interfaz de usuario
+\end{itemize}
+
+\subsection{Estructuras de Datos}
+
+El sistema define las siguientes estructuras principales en \texttt{types.go}:
+
+\subsubsection{Tipos Enumerados}
+
+\begin{lstlisting}
+type IssueType string
+const (
+    MECHTYPE       IssueType = "Mecanica"
+    ELECTRICTYPE   IssueType = "Electrica"
+    BODYTYPE       IssueType = "Carroceria"
+)
+
+type Priority string
+const (
+    LOW    Priority = "Baja"
+    MEDIUM Priority = "Media"
+    HIGH   Priority = "Alta"
+)
+
+type IssueStatus string
+const (
+    OPEN      IssueStatus = "Abierta"
+    INPROCESS IssueStatus = "En proceso"
+    CLOSED    IssueStatus = "Cerrada"
+)
+
+type SkillType string
+const (
+    MECHSKILL     SkillType = "Mecanica"
+    ELECTRICSKILL SkillType = "Electrica"
+    BODYSKILL     SkillType = "Carroceria"
+)
+
+type MechStatus string
+const (
+    ACTIVE   MechStatus = "Activo"
+    INACTIVE MechStatus = "De baja"
+)
+\end{lstlisting}
+
+\subsubsection{Entidades Principales}
+
+\textbf{Cliente (Client):}
+
+\begin{lstlisting}
+type Client struct {
+    id       ClientID      // Identificador unico
+    name     string        // Nombre del cliente
+    phone    string        // Telefono de contacto
+    email    string        // Correo electronico
+    vehicles []VehicleID   // Vehiculos asociados (relacion 1:N)
+}
+\end{lstlisting}
+
+\textbf{Vehículo (Vehicle):}
+
+\begin{lstlisting}
+type Vehicle struct {
+    id         VehicleID      // Matricula (identificador unico)
+    brand      string         // Marca del vehiculo
+    model      string         // Modelo del vehiculo
+    ownerID    ClientID       // Propietario (FK a Client)
+    checkInAt  time.Time      // Fecha de entrada al taller
+    eta        time.Duration  // Tiempo estimado de reparacion
+    issues     []IncidenceID  // Incidencias asociadas
+}
+\end{lstlisting}
+
+\textbf{Mecánico (Mechanic):}
+
+\begin{lstlisting}
+type Mechanic struct {
+    id         MechanicID     // Identificador unico
+    name       string         // Nombre del mecanico
+    skill      SkillType      // Especialidad
+    experience int            // Anios de experiencia
+    status     MechStatus     // Activo o de baja
+    issues     []IncidenceID  // Incidencias asignadas
+}
+\end{lstlisting}
+
+\textbf{Incidencia (Incidence):}
+
+\begin{lstlisting}
+type Incidence struct {
+    id          IncidenceID    // Identificador unico
+    vehicleID   VehicleID      // Vehiculo afectado
+    mechanics   []MechanicID   // Mecanicos asignados (N:M)
+    kind        IssueType      // Tipo de incidencia
+    prio        Priority       // Prioridad
+    description string         // Descripcion detallada
+    status      IssueStatus    // Estado actual
+}
+\end{lstlisting}
+
+\textbf{Plaza (Slot):}
+
+\begin{lstlisting}
+type Slot struct {
+    number    int         // Numero de plaza
+    vehicleID *VehicleID  // Vehiculo ocupando la plaza (nil si libre)
+}
+\end{lstlisting}
+
+\textbf{Taller (Garage):}
+
+\begin{lstlisting}
+type Garage struct {
+    clients   []*Client
+    vehicles  []*Vehicle
+    mechanics []*Mechanic
+    issues    []*Incidence
+    slots     []*Slot
+    vpool     []VehicleID      // Cola de vehiculos esperando
+    hirereqs  chan HireRequest // Canal para solicitudes de contratacion
+}
+\end{lstlisting}
+
+\subsection{Diagramas de Secuencia UML}
+
+\subsubsection{Flujo de Asignación de Vehículo a Plaza}
+
+Este diagrama muestra el proceso completo de asignación de un vehículo a una plaza del taller, incluyendo la asignación de mecánicos y la simulación de reparación.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth]{../images/asignacionVplaza.png}
+    \caption{Diagrama de Flujo de Asignación de un Vehículo a una Plaza}
+\end{figure}
+
+\textbf{Flujo principal:}
+
+\begin{enumerate}
+\item El usuario solicita meter un vehículo en el taller mediante \texttt{modifySlots()} / \texttt{addV()}
+\item El sistema verifica si hay plazas disponibles
+\item Si hay plazas, el usuario selecciona el vehículo por matrícula
+\item Se lanza una goroutine con \texttt{assignVtoSlot(vid)}
+\item Se obtiene un mecánico principal con \texttt{obtainMechanicForVehicle(vid)}:
+    \begin{itemize}
+    \item Si hay mecánico libre, se asigna directamente
+    \item Si no, el vehículo se agrega a la cola \texttt{vpool} y se espera con \texttt{waitForFreeMech()}
+    \end{itemize}
+\item Se coloca el vehículo en una plaza libre con \texttt{placeVehicleInSlot(vid)}
+\item Se recopilan incidencias y se calcula el ETA total con \texttt{collectIssuesAndEta(vehicle)}:
+    \begin{itemize}
+    \item Mecánica: 5 segundos
+    \item Eléctrica: 7 segundos
+    \item Carrocería: 11 segundos
+    \end{itemize}
+\item Si el ETA supera 15 segundos, se asigna un segundo mecánico:
+    \begin{itemize}
+    \item Se busca mecánico libre con \texttt{getFreeMech()}
+    \item Si no hay disponible, se envía \texttt{HireRequest} por el canal \texttt{hirereqs}
+    \item El menú principal detecta la solicitud con \texttt{checkAlert()}
+    \item Se muestra alerta al usuario
+    \item El usuario crea un nuevo mecánico con \texttt{newMech()}
+    \item El mecánico se devuelve por el canal de respuesta
+    \end{itemize}
+\item Se asignan los mecánicos a las incidencias con \texttt{autoAsignMtoIssues()}
+\item Se establece prioridad ALTA y estado EN PROCESO con \texttt{setPrioAndStatus()}
+\item Se simula la reparación con \texttt{time.Sleep(eta)}
+\item Se cierran las incidencias con \texttt{closeIssues()}
+\item Se extrae el vehículo de la plaza con \texttt{extractVfromSlot()}
+\item Se liberan los mecánicos eliminando las incidencias de sus listas
+\end{enumerate}
+
+\subsubsection{Flujo de Creación de Incidencia}
+
+Este diagrama muestra el proceso de creación de una nueva incidencia asociada a un vehículo existente.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth]{../images/creacionIncidencia.png}
+    \caption{Diagrama de Flujo de Creación de una Incidencia}
+\end{figure}
+
+\textbf{Flujo:}
+
+\begin{enumerate}
+\item El usuario selecciona la opción de crear incidencia desde el menú
+\item El sistema solicita un ID único mediante \texttt{askUniqueIntID()}
+\item Se valida que el ID no exista previamente
+\item Se muestra la lista de vehículos registrados
+\item El usuario selecciona la matrícula del vehículo afectado
+\item Se valida que el vehículo exista con \texttt{vidExists()}
+\item Se obtiene el puntero al vehículo con \texttt{getVByID(vid)}
+\item El usuario selecciona el tipo de incidencia (Mecánica/Eléctrica/Carrocería)
+\item Se asigna prioridad LOW por defecto
+\item Se asigna estado OPEN por defecto
+\item El usuario redacta una descripción detallada
+\item La incidencia se agrega al slice \texttt{g.issues}
+\item El ID de la incidencia se agrega al slice \texttt{v.issues} del vehículo
+\end{enumerate}
+
+\textbf{Nota:} Los mecánicos NO se asignan en este momento. La asignación ocurre automáticamente cuando el vehículo se coloca en una plaza del taller.
+
+\subsubsection{Sistema de Contratación Concurrente}
+
+Este diagrama muestra cómo funciona el sistema de alertas y contratación mediante canales de Go en el caso en el que necesitemos contratar un mecánico para cubrir una incidencia de alta prioridad.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.72\textwidth]{../images/obtenerMconcurrencia.png}
+    \caption{Diagrama de Flujo de la obtención de un nuevo mecánico concurrente cuando un hilo lo necesita}
+\end{figure}
+
+\textbf{Flujo:}
+
+\begin{enumerate}
+\item Durante \texttt{assignVtoSlot()}, se ejecuta \texttt{obtainSecondMechanic(vid)}
+\item Se busca mecánico libre con \texttt{getFreeMech()} sin éxito
+\item Se crea un \texttt{HireRequest} con:
+    \begin{itemize}
+    \item \texttt{vid}: ID del vehículo que necesita mecánico
+    \item \texttt{Reply}: Canal para recibir el mecánico contratado
+    \end{itemize}
+\item La solicitud se envía por el canal \texttt{hirereqs} (no bloqueante)
+\item La goroutine queda esperando respuesta en \texttt{req.Reply}
+\item En el loop principal de \texttt{main()}, se ejecuta \texttt{checkAlert()}
+\item \texttt{checkAlert()} lee del canal \texttt{hirereqs} de forma no bloqueante usando \texttt{select} con \texttt{default}
+\item Si hay solicitud pendiente, se muestra alerta al usuario
+\item Se invoca \texttt{newMech()} para crear un mecánico interactivamente
+\item Se generan automáticamente 2 plazas adicionales con \texttt{genSlots()}
+\item El mecánico recién creado se envía por \texttt{req.Reply}
+\item La goroutine del taller recibe el mecánico y continúa con \texttt{autoAsignMtoIssues()}
+\end{enumerate}
+
+\textbf{Ventajas de este diseño:}
+\begin{itemize}
+\item No bloqueante: La interfaz de usuario permanece responsiva
+\item Desacoplado: La lógica de asignación no conoce los detalles de contratación
+\item Escalable: Múltiples goroutines pueden solicitar contrataciones simultáneamente
+\end{itemize}
+
+\subsection{Funciones Principales}
+
+\subsubsection{Inicialización y Configuración}
+
+\textbf{newGarage() *Garage} (new.go:16)
+
+Constructor del taller. Inicializa todas las estructuras de datos y el canal de contratación:
+
+\begin{lstlisting}
+func newGarage() *Garage {
+    return &Garage{
+        clients:   nil,
+        vehicles:  nil,
+        mechanics: nil,
+        issues:    nil,
+        slots:     nil,
+        vpool:     nil,
+        hirereqs:  make(chan HireRequest),
+    }
+}
+\end{lstlisting}
+
+\textbf{genSlots()} (new.go:66)
+
+Genera 2 plazas adicionales por cada mecánico contratado. Se invoca automáticamente al crear un mecánico nuevo.
+
+\subsubsection{Gestión de Concurrencia}
+
+\textbf{assignVtoSlot(vid VehicleID)} (modify.go:237)
+
+Función principal de asignación ejecutada como goroutine. Coordina todo el proceso de reparación:
+
+\begin{enumerate}
+\item Obtención de mecánico principal (espera si es necesario)
+\item Colocación del vehículo en plaza
+\item Cálculo de ETA
+\item Asignación de segundo mecánico si es necesario
+\item Simulación de reparación con \texttt{time.Sleep()}
+\item Limpieza y liberación de recursos
+\end{enumerate}
+
+\textbf{waitForFreeMech() *Mechanic} (modify.go:217)
+
+Implementa una espera activa con polling cada segundo hasta encontrar un mecánico libre:
+
+\begin{lstlisting}
+func (g *Garage) waitForFreeMech() *Mechanic {
+    var m *Mechanic
+    for {
+        m = g.getFreeMech()
+        if m != nil {
+            return m
+        }
+        time.Sleep(1 * time.Second)
+    }
+}
+\end{lstlisting}
+
+\textbf{checkAlert()} (aux.go:262)
+
+Revisa el canal de contratación de forma no bloqueante. Se ejecuta en cada iteración del menú principal:
+
+\begin{lstlisting}
+func (g *Garage) checkAlert() {
+    for {
+        select {
+        case req := <-g.hirereqs:
+            fmt.Printf("[ALERTA] Es necesario contratar un mecánico nuevo para %s.\n", req.vid)
+            mech := g.newMech()
+            req.Reply <- mech
+            continue
+        default:
+            return
+        }
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Validación y Consultas}
+
+\textbf{askUniqueIntID(prompt string, exists func(int64) bool) int64} (aux.go:135)
+
+Solicita un ID entero único al usuario. Valida que sea positivo y que la función \texttt{exists} devuelva false:
+
+\begin{lstlisting}
+func askUniqueIntID(prompt string, exists func(int64) bool) int64 {
+    var id int64
+    for {
+        fmt.Print(prompt)
+        fmt.Scanf("%d", &id)
+        if id <= 0 {
+            fmt.Println("Debe ser > 0.")
+            continue
+        }
+        if exists(id) {
+            fmt.Println("Incorrecto, pruebe otro.")
+            continue
+        }
+        return id
+    }
+}
+\end{lstlisting}
+
+Esta función se usa con closures para validar diferentes tipos de IDs:
+
+\begin{itemize}
+\item \texttt{askUniqueIntID("ID cliente: ", func(n int64) bool \{ return g.ownerIDexists(ClientID(n)) \})}
+\item \texttt{askUniqueIntID("ID mecánico: ", func(n int64) bool \{ return g.mechIDexists(MechanicID(n)) \})}
+\end{itemize}
+
+\textbf{Funciones de existencia:}
+
+\begin{lstlisting}
+func (g *Garage) ownerIDexists(id ClientID) bool
+func (g *Garage) mechIDexists(id MechanicID) bool
+func (g *Garage) issueIDexists(id IncidenceID) bool
+func (g *Garage) vidExists(vid VehicleID) bool
+\end{lstlisting}
+
+Todas iteran sobre sus respectivos slices comparando IDs.
+
+\textbf{Funciones de obtención:}
+
+\begin{lstlisting}
+func (g *Garage) getClientByID(id ClientID) *Client
+func (g *Garage) getMechByID(id MechanicID) *Mechanic
+func (g *Garage) getIssueByID(id IncidenceID) *Incidence
+func (g *Garage) getVByID(vid VehicleID) *Vehicle
+\end{lstlisting}
+
+Devuelven punteros a las entidades buscadas o \texttt{nil} si no existen.
+
+\subsubsection{CRUD de Entidades}
+
+\textbf{Creación} (new.go):
+\begin{itemize}
+\item \texttt{newClient()}: Solicita ID, nombre, teléfono y email
+\item \texttt{newVehicle()}: Requiere cliente existente, solicita matrícula, marca y modelo
+\item \texttt{newIssue()}: Asocia a vehículo existente, solicita tipo y descripción
+\item \texttt{newMech()}: Crea mecánico y genera 2 plazas automáticamente
+\end{itemize}
+
+\textbf{Visualización} (display.go):
+\begin{itemize}
+\item \texttt{displayClients()}, \texttt{displayVehicles()}, \texttt{displayIssues()}, \texttt{displayMechs()}
+\item \texttt{displaySlots()}: Muestra estado de todas las plazas (libres/ocupadas)
+\item \texttt{listIncFromAvehicle()}: Lista incidencias de un vehículo específico
+\item \texttt{listVFromClient()}: Lista vehículos de un cliente
+\item \texttt{listDispMech()}: Mecánicos disponibles (sin incidencias asignadas)
+\item \texttt{dispIssuesOfMech()}: Incidencias asignadas a un mecánico
+\item \texttt{listClientsVInGarage()}: Clientes con vehículos actualmente en el taller
+\end{itemize}
+
+\textbf{Modificación} (modify.go):
+\begin{itemize}
+\item \texttt{modifyClient()}, \texttt{modifyVehicle()}, \texttt{modifyIssue()}, \texttt{modifyMech()}
+\item Cada función permite modificar campos específicos manteniendo integridad referencial
+\item \texttt{modifySlots()}: Permite meter o sacar vehículos de las plazas
+\end{itemize}
+
+\textbf{Eliminación} (delete.go):
+\begin{itemize}
+\item \texttt{delClient()}: Elimina cliente y en cascada todos sus vehículos
+\item \texttt{delVehicle()}: Elimina vehículo y todas sus incidencias
+\item \texttt{delIssue()}: Elimina incidencia y actualiza referencias en vehículos y mecánicos
+\item \texttt{delMech()}: Elimina mecánico y reduce plazas en 2
+\end{itemize}
+
+Todas las operaciones de eliminación mantienen la consistencia eliminando referencias en entidades relacionadas.
+
+\subsection{Algoritmos Clave}
+
+\subsubsection{Cálculo de ETA}
+
+La función \texttt{collectIssuesAndEta()} recorre todas las incidencias de un vehículo y suma tiempos según el tipo:
+
+\begin{lstlisting}
+func (g *Garage) collectIssuesAndEta(v *Vehicle) ([]*Incidence, time.Duration) {
+    var issues []*Incidence
+    var eta time.Duration
+    
+    for _, issueID := range v.issues {
+        inc := g.getIssueByID(issueID)
+        if inc == nil {
+            continue
+        }
+        issues = append(issues, inc)
+        
+        switch inc.kind {
+        case MECHTYPE:
+            eta += 5 * time.Second
+        case ELECTRICTYPE:
+            eta += 7 * time.Second
+        default: // BODYTYPE
+            eta += 11 * time.Second
+        }
+    }
+    return issues, eta
+}
+\end{lstlisting}
+
+\subsubsection{Asignación de Mecánicos a Incidencias}
+
+La función \texttt{assignMechsToIssue()} (aux.go:85) implementa un sistema interactivo de asignación:
+
+\begin{enumerate}
+\item Filtra mecánicos compatibles: misma especialidad que el tipo de incidencia, activos y no ya asignados
+\item Muestra lista de candidatos
+\item Permite asignar múltiples mecánicos de forma iterativa
+\item Actualiza relación bidireccional: \texttt{mechanic.issues} e \texttt{incidence.mechanics}
+\end{enumerate}
+
+\subsubsection{Gestión de Cola de Espera}
+
+El slice \texttt{vpool []VehicleID} actúa como cola FIFO para vehículos esperando mecánico:
+
+\begin{lstlisting}
+// Agregar a cola
+g.vpool = append(g.vpool, vid)
+
+// Esperar activamente
+m := g.waitForFreeMech()
+
+// Remover de cola
+g.vpool = removeVID(g.vpool, vid)
+\end{lstlisting}
+
+La función \texttt{removeVID()} (aux.go:31) elimina un VehicleID de un slice preservando el orden.
+
+\section{Resultados de Tests y Análisis}
+
+\subsection{Suite de Tests}
+
+El proyecto incluye 4 tests de comparación de escenarios (\texttt{*\_test.go}):
+
+\begin{itemize}
+\item \textbf{TestDupCarsWithSameIssue}: Duplicar cantidad de vehículos con incidencias del mismo tipo
+\item \textbf{TestDupMechs}: Duplicar plantilla de mecánicos de 3 a 6
+\item \textbf{Test3MechsVS1others}: Distribución 3:1:1 (Mecánica:Eléctrica:Carrocería)
+\item \textbf{Test1MechVS3others}: Distribución 1:3:3 (Mecánica:Eléctrica:Carrocería)
+\end{itemize}
+
+\subsection{Resultados de Ejecución}
+
+Todos los tests pasaron exitosamente:
+
+\begin{verbatim}
+=== RUN   TestDupCarsWithSameIssue
+--- PASS: TestDupCarsWithSameIssue (0.00s)
+=== RUN   TestDupMechs
+--- PASS: TestDupMechs (0.00s)
+=== RUN   Test3MechsVS1others
+--- PASS: Test3MechsVS1others (0.00s)
+=== RUN   Test1MechVS3others
+--- PASS: Test1MechVS3others (0.00s)
+PASS
+ok      practica2/src   (cached)
+\end{verbatim}
+
+\textbf{Análisis:}
+\begin{itemize}
+\item Tiempo de ejecución: 0.00s para todos los tests (instantáneo)
+\item Estado: Todos los tests pasan sin errores
+\item Cache: Resultados cacheados por Go, indicando que no hubo cambios en el código desde la última ejecución
+\end{itemize}
+
+\subsection{Cobertura de Código}
+
+El archivo \texttt{coverage.txt} muestra la cobertura por archivo y función. Resumen por archivo:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Archivo} & \textbf{Funciones Cubiertas} & \textbf{Funciones Totales} \\ \hline
+aux.go & 2 & 29 \\ \hline
+display.go & 0 & 13 \\ \hline
+main.go & 0 & 1 \\ \hline
+menu.go & 0 & 6 \\ \hline
+new.go & 1 (genSlots) & 5 \\ \hline
+modify.go & 0 & 15 \\ \hline
+delete.go & 0 & 6 \\ \hline
+\textbf{Total} & \textbf{3} & \textbf{75} \\ \hline
+\end{tabular}
+\caption{Cobertura de código por archivo}
+\end{table}
+
+\textbf{Funciones cubiertas por tests:}
+\begin{enumerate}
+\item \texttt{availableSlots()} - Cuenta plazas libres
+\item \texttt{CountVehiclesWithSingleIssue()} - Cuenta vehículos con una incidencia de tipo específico
+\item \texttt{genSlots()} - Genera 2 plazas por mecánico
+\item \texttt{countSkill()} - Cuenta mecánicos por especialidad
+\end{enumerate}
+
+\textbf{Análisis de cobertura:}
+
+\begin{itemize}
+\item Cobertura baja: Solo 4\% de las funciones están cubiertas por tests
+\item Enfoque selectivo: Los tests se centran en validar lógica de negocio específica (contadores y distribuciones)
+\item Funciones sin cobertura: Toda la interfaz de usuario (menús, entrada/salida) y operaciones CRUD no están cubiertas
+\end{itemize}
+
+\textbf{Recomendaciones:}
+\begin{itemize}
+\item Añadir tests unitarios para funciones auxiliares (validación, búsqueda)
+\item Implementar tests de integración para flujos completos (crear cliente → crear vehículo → crear incidencia)
+\item Mockear entrada/salida para testear funciones interactivas
+\item Añadir benchmarks para \texttt{assignVtoSlot()} y funciones concurrentes
+\end{itemize}
+
+\subsection{Análisis de Tests Específicos}
+
+\subsubsection{TestDupCarsWithSameIssue}
+
+\textbf{Objetivo:} Verificar que al duplicar la cantidad de vehículos con una incidencia del mismo tipo, el contador también se duplica.
+
+\textbf{Implementación} (dupmaxcar\_test.go):
+
+\begin{lstlisting}
+func TestDupCarsWithSameIssue(t *testing.T) {
+    const baseN = 3
+    g1 := genGarage(t, baseN, MECHTYPE)
+    got1 := g1.CountVehiclesWithSingleIssue(MECHTYPE)
+    if got1 != baseN {
+        t.Fatalf("para %d coches esperábamos contador=%d; got=%d", 
+                 baseN, baseN, got1)
+    }
+    
+    g2 := genGarage(t, 2*baseN, MECHTYPE)
+    got2 := g2.CountVehiclesWithSingleIssue(MECHTYPE)
+    if got2 != 2*baseN {
+        t.Fatalf("para %d coches esperábamos contador=%d; got=%d", 
+                 2*baseN, 2*baseN, got2)
+    }
+    
+    if got2 != 2*got1 {
+        t.Errorf("se esperaba que al duplicar coches, el contador se duplicase")
+    }
+}
+\end{lstlisting}
+
+\textbf{Resultado:} PASS
+
+\textbf{Conclusión:} La función \texttt{CountVehiclesWithSingleIssue()} cuenta correctamente vehículos con exactamente una incidencia del tipo especificado. La proporcionalidad lineal se mantiene al duplicar la población.
+
+\subsubsection{TestDupMechs}
+
+\textbf{Objetivo:} Verificar que al duplicar la plantilla de mecánicos de 3 a 6, las plazas también se duplican de 6 a 12.
+
+\textbf{Resultado:} PASS
+
+\textbf{Conclusiones:}
+\begin{itemize}
+\item La función auxiliar \texttt{gen3Mechs()} genera correctamente 3 mecánicos (uno de cada especialidad)
+\item La regla ``2 plazas por mecánico'' se cumple: 3 mecánicos → 6 plazas, 6 mecánicos → 12 plazas
+\item La distribución de especialidades es equitativa (1-1-1, luego 2-2-2)
+\end{itemize}
+
+\subsubsection{Test3MechsVS1others}
+
+\textbf{Objetivo:} Verificar distribución 3:1:1 (3 mecánicos de Mecánica por cada 1 de Eléctrica y 1 de Carrocería).
+
+\textbf{Resultado:} PASS
+
+\textbf{Conclusión:} La función \texttt{countSkill()} cuenta correctamente mecánicos por especialidad. Las proporciones 3:1:1 se mantienen correctamente.
+
+\subsubsection{Test1MechVS3others}
+
+\textbf{Objetivo:} Verificar distribución 1:3:3 (1 mecánico de Mecánica por cada 3 de Eléctrica y 3 de Carrocería).
+
+\textbf{Resultado:} PASS
+
+\textbf{Conclusión:} El sistema mantiene correctamente proporciones inversas a las del test anterior.
+
+\subsection{Métricas de Calidad}
+
+\textbf{Complejidad ciclomática estimada:}
+\begin{itemize}
+\item Funciones sencillas (getters, setters): 1-2
+\item Funciones con validación (askUniqueIntID): 3-4
+\item Funciones con menús (polyAskMenuInt): 5-6
+\item Función principal \texttt{assignVtoSlot()}: aproximadamente 10
+\end{itemize}
+
+\textbf{Acoplamiento:}
+\begin{itemize}
+\item Alto acoplamiento entre \texttt{Garage} y todas las entidades (inevitable dado el diseño de repositorio central)
+\item Bajo acoplamiento entre entidades individuales
+\end{itemize}
+
+\textbf{Cohesión:}
+\begin{itemize}
+\item Alta cohesión funcional por archivo (new.go, delete.go, modify.go, display.go)
+\item Cada módulo tiene una responsabilidad clara
+\end{itemize}
+
+\textbf{Mantenibilidad:}
+\begin{itemize}
+\item Código bien estructurado y comentado
+\item Separación clara de responsabilidades
+\item Uso de tipos personalizados mejora legibilidad
+\end{itemize}
+
+\section{Código Fuente Completo}
+
+\subsection{types.go - Definición de Estructuras}
+
+\begin{lstlisting}
+package main
+
+import "time"
+
+// Tipos enumerados para incidencias
+type IssueType string
+const (
+    MECHTYPE       IssueType = "Mecánica"
+    ELECTRICTYPE   IssueType = "Eléctrica"
+    BODYTYPE       IssueType = "Carrocería"
+)
+
+type Priority string
+const (
+    LOW    Priority = "Baja"
+    MEDIUM Priority = "Media"
+    HIGH   Priority = "Alta"
+)
+
+type IssueStatus string
+const (
+    OPEN      IssueStatus = "Abierta"
+    INPROCESS IssueStatus = "En proceso"
+    CLOSED    IssueStatus = "Cerrada"
+)
+
+// Tipos para mecánicos
+type SkillType string
+const (
+    MECHSKILL     SkillType = "Mecánica"
+    ELECTRICSKILL SkillType = "Eléctrica"
+    BODYSKILL     SkillType = "Carrocería"
+)
+
+type MechStatus string
+const (
+    ACTIVE   MechStatus = "Activo"
+    INACTIVE MechStatus = "De baja"
+)
+
+// Tipos de identificadores (para mayor claridad semántica)
+type ClientID int64
+type MechanicID int64
+type IncidenceID int64
+type VehicleID string
+
+// --------------------------------------
+// ---------- ESTRUCTURAS DE DATOS ------
+// --------------------------------------
+
+// Client representa a un cliente del taller
+type Client struct {
+    id       ClientID
+    name     string
+    phone    string
+    email    string
+    vehicles []VehicleID  // Relación 1:N con vehículos
+}
+
+// Mechanic representa un mecánico del taller
+type Mechanic struct {
+    id         MechanicID
+    name       string
+    skill      SkillType
+    experience int
+    status     MechStatus
+    issues     []IncidenceID  // Incidencias asignadas
+}
+
+// Vehicle representa un vehículo en el taller
+// Mantiene relación con cliente (ownerID)
+type Vehicle struct {
+    id        VehicleID     // Matrícula
+    brand     string
+    model     string
+    ownerID   ClientID
+    checkInAt time.Time
+    eta       time.Duration  // Tiempo estimado de reparación
+    issues    []IncidenceID
+}
+
+// Incidence representa una incidencia/reparación
+// Asignación N:M con mecánicos mediante slice de IDs
+type Incidence struct {
+    id          IncidenceID
+    vehicleID   VehicleID
+    mechanics   []MechanicID  // Múltiples mecánicos pueden trabajar
+    kind        IssueType
+    prio        Priority
+    description string
+    status      IssueStatus
+}
+
+// Slot representa una plaza física del taller
+// Si vehicleID == nil, la plaza está libre
+type Slot struct {
+    number    int
+    vehicleID *VehicleID
+}
+
+// HireRequest representa una solicitud de contratación
+type HireRequest struct {
+    vid   VehicleID       // Vehículo que necesita mecánico
+    Reply chan *Mechanic  // Canal para devolver mecánico creado
+}
+
+// Garage es la estructura principal del sistema
+type Garage struct {
+    clients   []*Client
+    vehicles  []*Vehicle
+    mechanics []*Mechanic
+    issues    []*Incidence
+    slots     []*Slot
+    vpool     []VehicleID      // Cola de vehículos esperando
+    hirereqs  chan HireRequest // Canal para contratación
+}
+\end{lstlisting}
+
+\subsection{main.go - Punto de Entrada}
+
+\begin{lstlisting}
+package main
+
+import "fmt"
+
+func main() {
+    var option int
+    var g *Garage
+    
+    // Inicializar taller
+    g = newGarage()
+    
+    fmt.Printf("-----------------------------------\n")
+    fmt.Printf("- BIENVENIDO AL TALLER LACOSTE.CO -\n")
+    fmt.Printf("-----------------------------------\n")
+    
+    // Loop principal del menú
+    for {
+        // Revisar alertas de contratación
+        g.checkAlert()
+        
+        fmt.Printf("=== Menú Principal ===\n\n")
+        option = polyAskMenuInt("Seleccione una opción:", 7)
+        g.checkAlert()
+        
+        switch option {
+        case 1:  // Crear
+            fmt.Printf("=== Menú de Creación ===\n\n")
+            option = polyAskMenuInt("Seleccione qué crear: ", 8)
+            creationMenu(option, g)
+            
+        case 2:  // Visualizar
+            fmt.Printf("=== Menú de Visualización ===\n\n")
+            option = polyAskMenuInt("Seleccione qué visualizar: ", 9)
+            fmt.Println()
+            visualitationMenu(option, g)
+            
+        case 3:  // Modificar
+            fmt.Printf("=== Menú de Modificación ===\n\n")
+            option = polyAskMenuInt("Seleccione qué modificar: ", 10)
+            fmt.Println()
+            modificationMenu(option, g)
+            
+        case 4:  // Eliminar
+            fmt.Printf("=== Menú de Eliminación ===\n\n")
+            option = polyAskMenuInt("Seleccione qué eliminar: ", 11)
+            fmt.Println()
+            deletionMenu(option, g)
+            
+        case 5:  // Salir
+            return
+        }
+    }
+}
+\end{lstlisting}
+
+\subsection{new.go - Funciones de Creación (Extracto)}
+
+\begin{lstlisting}
+package main
+
+import (
+    "bufio"
+    "fmt"
+    "os"
+    "time"
+)
+
+// Constructor del taller
+func newGarage() *Garage {
+    return &Garage{
+        clients:   nil,
+        vehicles:  nil,
+        mechanics: nil,
+        issues:    nil,
+        slots:     nil,
+        vpool:     nil,
+        hirereqs:  make(chan HireRequest),
+    }
+}
+
+// CREAR un CLIENTE
+func (g *Garage) newClient() {
+    var c Client
+    c.id = ClientID(askUniqueIntID("ID cliente (>0): ", 
+        func(n int64) bool { return g.ownerIDexists(ClientID(n)) }))
+    fmt.Printf("Nombre: ")
+    fmt.Scanf("%s", &c.name)
+    fmt.Printf("Teléfono: ")
+    fmt.Scanf("%s", &c.phone)
+    fmt.Printf("Email: ")
+    fmt.Scanf("%s", &c.email)
+    g.clients = append(g.clients, &c)
+}
+
+// Genera 2 plazas adicionales
+func (g *Garage) genSlots() {
+    for i := 0; i < 2; i++ {
+        g.slots = append(g.slots, &Slot{
+            number:    len(g.slots) + 1,
+            vehicleID: nil,
+        })
+    }
+}
+
+// CREAR MECÁNICO
+func (g *Garage) newMech() *Mechanic {
+    var m Mechanic
+    
+    // Ampliar plazas del taller (2 por mecánico)
+    g.genSlots()
+    
+    m.id = MechanicID(askUniqueIntID("ID del mecánico: ", 
+        func(n int64) bool { return g.mechIDexists(MechanicID(n)) }))
+    fmt.Printf("Nombre: ")
+    fmt.Scanf("%s", &m.name)
+    fmt.Printf("Experiencia(años): ")
+    fmt.Scanf("%d", &m.experience)
+    m.skill = SkillType(polyAskMenuStr("Especialidad:", 1))
+    m.status = MechStatus(polyAskMenuStr("Estado:", 2))
+    
+    g.mechanics = append(g.mechanics, &m)
+    return g.mechanics[len(g.mechanics)-1]
+}
+\end{lstlisting}
+
+\subsection{aux.go - Funciones Auxiliares (Extracto)}
+
+\begin{lstlisting}
+package main
+
+import (
+    "bufio"
+    "fmt"
+    "os"
+)
+
+// Contar plazas libres
+func (g *Garage) availableSlots() int {
+    var count int = 0
+    for _, s := range g.slots {
+        if s.vehicleID == nil {
+            count++
+        }
+    }
+    return count
+}
+
+// Verificar si un mecánico está libre
+func isFree(m *Mechanic) bool {
+    return len(m.issues) == 0 && m.status == ACTIVE
+}
+
+// Pedir un ID único de tipo entero
+func askUniqueIntID(prompt string, exists func(int64) bool) int64 {
+    var id int64
+    for {
+        fmt.Print(prompt)
+        fmt.Scanf("%d", &id)
+        if id <= 0 {
+            fmt.Println("Debe ser > 0.")
+            continue
+        }
+        if exists(id) {
+            fmt.Println("Incorrecto, pruebe otro.")
+            continue
+        }
+        return id
+    }
+}
+
+// Revisar canal de contratación (no bloqueante)
+func (g *Garage) checkAlert() {
+    for {
+        select {
+        case req := <-g.hirereqs:
+            fmt.Printf("-----------------------------------------------\n")
+            fmt.Printf("[ALERTA] Contratar mecánico para %s.\n", req.vid)
+            fmt.Printf("-----------------------------------------------\n\n")
+            mech := g.newMech()
+            req.Reply <- mech
+            continue
+        default:
+            return
+        }
+    }
+}
+
+// Función de testing: cuenta vehículos con una incidencia
+func (g *Garage) CountVehiclesWithSingleIssue(kind IssueType) int {
+    count := 0
+    for _, v := range g.vehicles {
+        if len(v.issues) != 1 {
+            continue
+        }
+        inc := g.getIssueByID(v.issues[0])
+        if inc != nil && inc.kind == kind {
+            count++
+        }
+    }
+    return count
+}
+
+// Función de testing: cuenta mecánicos por especialidad
+func (g *Garage) countSkill(skill SkillType) int {
+    var count int = 0
+    for _, m := range g.mechanics {
+        if m.skill == skill {
+            count++
+        }
+    }
+    return count
+}
+\end{lstlisting}
+
+\subsection{modify.go - Asignación Concurrente (Extracto Clave)}
+
+\begin{lstlisting}
+package main
+
+import (
+    "fmt"
+    "time"
+)
+
+// Meter un vehículo a una plaza del taller
+func (g *Garage) addV() {
+    var vid VehicleID
+    
+    if g.availableSlots() == 0 {
+        fmt.Printf("No hay plazas disponibles.\n\n")
+        return
+    }
+    
+    fmt.Printf("Vehículos no asignados a una plaza:\n")
+    for _, v := range g.vehicles {
+        if !g.vIsInSlot(v.id) {
+            fmt.Printf(" - %s\n", v.id)
+        }
+    }
+    fmt.Println()
+    
+    vid = VehicleID(askUniqueStrID("Matrícula del vehículo: ", 
+        func(s string) bool { return !g.vidExists(VehicleID(s)) }))
+    
+    // Lanzar goroutine para asignación concurrente
+    go g.assignVtoSlot(vid)
+}
+
+// Función principal de asignación (goroutine)
+func (g *Garage) assignVtoSlot(vid VehicleID) {
+    vehicle := g.getVByID(vid)
+    if vehicle == nil || len(vehicle.issues) == 0 {
+        return
+    }
+    
+    // 1) Obtener mecánico principal
+    mainMech := g.obtainMechanicForVehicle(vid)
+    
+    // 2) Meter vehículo en plaza
+    if !g.placeVehicleInSlot(vid) {
+        return
+    }
+    
+    // 3) Recoger incidencias y calcular ETA
+    issues, eta := g.collectIssuesAndEta(vehicle)
+    vehicle.eta = eta
+    
+    // 4) Asignar mecánico principal
+    g.autoAsignMtoIssues(mainMech, issues)
+    
+    // 5) Posible segundo mecánico
+    var extraMech *Mechanic
+    if eta > 15*time.Second {
+        extraMech = g.obtainSecondMechanic(vid)
+        setPrioAndStatus(issues)
+        g.autoAsignMtoIssues(extraMech, issues)
+    }
+    
+    // 6) Simular reparación
+    time.Sleep(eta)
+    
+    // 7) Cerrar incidencias y liberar
+    closeIssues(issues)
+    g.extractVfromSlot(vid)
+    for _, inc := range issues {
+        delIssueFromMech(mainMech, inc)
+        if extraMech != nil {
+            delIssueFromMech(extraMech, inc)
+        }
+        delIssueFromV(vehicle, inc)
+    }
+}
+
+// Espera activa hasta mecánico libre
+func (g *Garage) waitForFreeMech() *Mechanic {
+    var m *Mechanic
+    for {
+        m = g.getFreeMech()
+        if m != nil {
+            return m
+        }
+        time.Sleep(1 * time.Second)
+    }
+}
+
+// Construir slice de incidencias y calcular ETA
+func (g *Garage) collectIssuesAndEta(v *Vehicle) ([]*Incidence, time.Duration) {
+    var (
+        issues []*Incidence
+        eta    time.Duration
+    )
+    
+    for _, issueID := range v.issues {
+        inc := g.getIssueByID(issueID)
+        if inc == nil {
+            continue
+        }
+        issues = append(issues, inc)
+        
+        switch inc.kind {
+        case MECHTYPE:
+            eta += 5 * time.Second
+        case ELECTRICTYPE:
+            eta += 7 * time.Second
+        default:
+            eta += 11 * time.Second
+        }
+    }
+    return issues, eta
+}
+
+// Obtener segundo mecánico (o contratar)
+func (g *Garage) obtainSecondMechanic(vid VehicleID) *Mechanic {
+    if m := g.getFreeMech(); m != nil {
+        return m
+    }
+    
+    // Enviar solicitud de contratación
+    req := HireRequest{
+        vid:   vid,
+        Reply: make(chan *Mechanic),
+    }
+    g.hirereqs <- req
+    return <-req.Reply
+}
+\end{lstlisting}
+
+\section{Conclusiones}
+
+\subsection{Objetivos Cumplidos}
+
+El sistema implementado cumple con todos los requisitos especificados:
+
+\begin{itemize}
+\item Gestión completa de Clientes (CRUD + listados)
+\item Gestión completa de Vehículos (CRUD + asociación a clientes)
+\item Gestión completa de Incidencias (CRUD + asignación de mecánicos)
+\item Gestión completa de Mecánicos (CRUD + alta/baja)
+\item Sistema de plazas dinámico (2 por mecánico)
+\item Visualización de estado del taller
+\item Listados específicos (incidencias por vehículo, vehículos por cliente, mecánicos disponibles, etc.)
+\item Menús y submenús intuitivos
+\end{itemize}
+
+\subsection{Características Destacadas}
+
+\textbf{1. Concurrencia con Goroutines:}
+\begin{itemize}
+\item La asignación de vehículos a plazas se ejecuta en goroutines independientes
+\item Permite simular reparaciones sin bloquear la interfaz de usuario
+\item Sistema de canales para comunicación entre goroutines y el proceso principal
+\end{itemize}
+
+\textbf{2. Sistema de Contratación Dinámica:}
+\begin{itemize}
+\item Detección automática de necesidad de personal adicional
+\item Alertas al usuario cuando se requiere contratar
+\item Comunicación asíncrona mediante canales de Go
+\end{itemize}
+
+\textbf{3. Simulación Realista:}
+\begin{itemize}
+\item Cálculo de ETA basado en tipo y cantidad de incidencias
+\item Asignación de segundo mecánico para trabajos largos
+\item Priorización automática de incidencias urgentes
+\end{itemize}
+
+\textbf{4. Integridad Referencial:}
+\begin{itemize}
+\item Eliminación en cascada de entidades relacionadas
+\item Actualización bidireccional de relaciones
+\item Validación exhaustiva de IDs únicos
+\end{itemize}
+
+\subsection{Limitaciones Actuales}
+
+\textbf{1. Persistencia:}
+\begin{itemize}
+\item Todos los datos se almacenan en memoria (se pierden al cerrar)
+\item Solución futura: Implementar serialización JSON o base de datos
+\end{itemize}
+
+\textbf{2. Sincronización:}
+\begin{itemize}
+\item No hay mutexes para proteger accesos concurrentes
+\item Posibles condiciones de carrera en entornos multi-goroutine intensivos
+\item Solución futura: Usar \texttt{sync.Mutex} o \texttt{sync.RWMutex}
+\end{itemize}
+
+\textbf{3. Cobertura de Tests:}
+\begin{itemize}
+\item Solo 4\% de funciones cubiertas
+\item Tests centrados en lógica de negocio
+\item Solución futura: Mocking de I/O, tests de integración
+\end{itemize}
+
+\subsection{Lecciones Aprendidas}
+
+\textbf{1. Diseño de Tipos Personalizados:}
+
+El uso de tipos como \texttt{ClientID}, \texttt{MechanicID}, \texttt{VehicleID} mejoró significativamente la legibilidad del código y previno errores de mezcla de identificadores.
+
+\textbf{2. Canales como Mecanismo de Comunicación:}
+
+Los canales de Go demostraron ser una herramienta elegante para comunicación entre goroutines, especialmente para solicitudes asíncronas como la contratación de mecánicos.
+
+\textbf{3. Separación de Responsabilidades:}
+
+La organización del código en archivos por funcionalidad facilitó el mantenimiento y la comprensión del sistema.
+
+\textbf{4. Testing Basado en Comparaciones:}
+
+Los tests implementados verifican proporcionalidad y ratios en lugar de valores absolutos, lo que los hace más robustos ante cambios en configuración.
+
+\subsection{Trabajo Futuro}
+
+\textbf{Mejoras de Corto Plazo:}
+\begin{itemize}
+\item Implementar persistencia con codificación JSON
+\item Añadir mutexes para acceso seguro a estructuras compartidas
+\item Ampliar suite de tests con tests de integración
+\item Validación avanzada de entrada con expresiones regulares
+\end{itemize}
+
+\textbf{Mejoras de Medio Plazo:}
+\begin{itemize}
+\item Interfaz web con servidor HTTP
+\item API REST para integración con otros sistemas
+\item Base de datos relacional (SQLite o PostgreSQL)
+\item Sistema de autenticación y roles de usuario
+\end{itemize}
+
+\textbf{Mejoras de Largo Plazo:}
+\begin{itemize}
+\item Dashboard en tiempo real con WebSockets
+\item Notificaciones push a clientes
+\item Sistema de facturación integrado
+\item Análisis de datos y métricas de rendimiento
+\end{itemize}
+
+\section{Referencias}
+
+\begin{enumerate}
+\item Donovan, A. A., \& Kernighan, B. W. (2015). \textit{The Go Programming Language}. Addison-Wesley Professional.
+\item Cox-Buday, K. (2017). \textit{Concurrency in Go: Tools and Techniques for Developers}. O'Reilly Media.
+\item Go Official Documentation. \textit{Effective Go}. https://golang.org/doc/effective\_go
+\item Go Blog. \textit{Go Concurrency Patterns}. https://go.dev/blog/pipelines
+\item Martin, R. C. (2008). \textit{Clean Code: A Handbook of Agile Software Craftsmanship}. Prentice Hall.
+\end{enumerate}
+
+\section{Apéndices}
+
+\subsection{Apéndice A: Estructura del Proyecto}
+
+\begin{verbatim}
+practica2/
+├── src/
+│   ├── main.go              # Punto de entrada
+│   ├── types.go             # Estructuras de datos
+│   ├── new.go               # Creación
+│   ├── display.go           # Visualización
+│   ├── modify.go            # Modificación
+│   ├── delete.go            # Eliminación
+│   ├── aux.go               # Auxiliares
+│   ├── menu.go              # Menús
+│   ├── dupmaxcar_test.go    # Tests
+│   ├── dupmechs_test.go
+│   └── threevsone_test.go
+├── coverage.txt
+└── resultados.txt
+\end{verbatim}
+
+\subsection{Apéndice B: Comandos de Ejecución}
+
+\textbf{Compilar y ejecutar:}
+\begin{verbatim}
+go build -o taller *.go
+./taller
+\end{verbatim}
+
+\textbf{Ejecutar tests:}
+\begin{verbatim}
+go test -v
+\end{verbatim}
+
+\textbf{Generar cobertura:}
+\begin{verbatim}
+go test -coverprofile=coverage.txt
+go tool cover -html=coverage.txt -o coverage.html
+\end{verbatim}
+
+\subsection{Apéndice C: Configuración de LyX}
+
+Para importar este documento en LyX:
+
+\begin{enumerate}
+\item Guardar el archivo .tex generado
+\item Abrir LyX
+\item \textbf{Archivo → Importar → LaTeX (Simple)}
+\item Seleccionar el archivo .tex
+\item Verificar que se importó correctamente
+\item \textbf{Archivo → Exportar → PDF (pdflatex)}
+\end{enumerate}
+
+\textbf{Paquetes necesarios en LaTeX:}
+\begin{itemize}
+\item inputenc, babel (español)
+\item amsmath, amsfonts, amssymb
+\item listings, xcolor
+\item graphicx, hyperref
+\item geometry
+\end{itemize}
+
+\end{document}
