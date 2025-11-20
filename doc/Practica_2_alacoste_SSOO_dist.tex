@@ -209,7 +209,7 @@ Este diagrama muestra el proceso completo de asignación de un vehículo a una p
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.72\textwidth]{../images/asignacionVplaza.png}
-    \caption{Diagrama de Flujo de Asignación de un Vehículo a una Plaza}
+    \caption{Diagrama de Secuencia de Asignación de un Vehículo a una Plaza}
 \end{figure}
 
 \textbf{Flujo principal:}
@@ -254,7 +254,7 @@ Este diagrama muestra el proceso de creación de una nueva incidencia asociada a
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.72\textwidth]{../images/creacionIncidencia.png}
-    \caption{Diagrama de Flujo de Creación de una Incidencia}
+    \caption{Diagrama de Secuencia de Creación de una Incidencia}
 \end{figure}
 
 \textbf{Flujo:}
@@ -283,13 +283,13 @@ Este diagrama muestra cómo funciona el sistema de alertas y contratación media
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.72\textwidth]{../images/obtenerMconcurrencia.png}
-    \caption{Diagrama de Flujo de la obtención de un nuevo mecánico concurrente cuando un hilo lo necesita}
+    \caption{Diagrama de Secuencia de la obtención de un nuevo mecánico concurrentemente cuando un hilo lo necesita}
 \end{figure}
 
 \textbf{Flujo:}
 
 \begin{enumerate}
-\item Durante \texttt{assignVtoSlot()}, se ejecuta \texttt{obtainSecondMechanic(vid)}
+\item Durante \texttt{assignVtoSlot()} y si ETA > 15 segundos, se ejecuta \texttt{obtainSecondMechanic(vid)}
 \item Se busca mecánico libre con \texttt{getFreeMech()} sin éxito
 \item Se crea un \texttt{HireRequest} con:
     \begin{itemize}
@@ -419,10 +419,13 @@ func askUniqueIntID(prompt string, exists func(int64) bool) int64 {
 
 Esta función se usa con closures para validar diferentes tipos de IDs:
 
-\begin{itemize}
-\item \texttt{askUniqueIntID("ID cliente: ", func(n int64) bool \{ return g.ownerIDexists(ClientID(n)) \})}
-\item \texttt{askUniqueIntID("ID mecánico: ", func(n int64) bool \{ return g.mechIDexists(MechanicID(n)) \})}
-\end{itemize}
+\begin{lstlisting}
+askUniqueIntID("ID cliente: ", func(n int64) bool { return g.ownerIDexists(ClientID(n)) })
+\end{lstlisting}
+\begin{lstlisting}
+askUniqueIntID("ID mecánico: ", func(n int64) bool { return g.mechIDexists(MechanicID(n)) })
+\end{lstlisting}
+
 
 \textbf{Funciones de existencia:}
 
